@@ -28,9 +28,10 @@ function revokeErrors(t: TFn): Record<number, string> {
  * A card whose link leaked can be revoked (`cancel_vouch`, #137) after a confirm step
  * that says the stake is not refunded; the action only shows for the connected wallet's
  * own cards on a contract that supports it. Shows a friendly empty state when there's
- * nothing pending.
+ * nothing pending; with `hideWhenEmpty` (the /app home) it renders nothing while loading or
+ * when nothing is pending instead.
  */
-export function PendingHalfCards() {
+export function PendingHalfCards({ hideWhenEmpty = false }: { hideWhenEmpty?: boolean }) {
   const t = useTranslations();
   const { locale } = useLocale();
   const { profile } = useWallet();
@@ -73,6 +74,7 @@ export function PendingHalfCards() {
   }
 
   if (items === null) {
+    if (hideWhenEmpty) return null;
     return (
       <Frame label={t('pendingHalfCards.frame')} index="00" accent="tertiary" tape="tr">
         <div className="space-y-2 p-4">
@@ -84,6 +86,7 @@ export function PendingHalfCards() {
   }
 
   if (items.length === 0) {
+    if (hideWhenEmpty) return null;
     return (
       <Frame label={t('pendingHalfCards.frame')} index="00" accent="tertiary" tape="tr">
         <div className="flex flex-col items-center gap-3 px-6 py-8 text-center">
