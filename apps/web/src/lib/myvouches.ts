@@ -4,7 +4,14 @@
  * gets slashed if nobody claims within the window — re-share the link). The claimed ones
  * also surface the voucher bonus still waiting on each claimer (`getOwedBonuses`).
  */
-import { claimLink, getPending, getVouch, VOUCH_TTL_SECS, type ClaimCode } from './reputation';
+import {
+  claimLink,
+  getPending,
+  getVouch,
+  isVouchCancelled,
+  VOUCH_TTL_SECS,
+  type ClaimCode,
+} from './reputation';
 import { reverseHandle } from './registry';
 import { subscribeToPush } from './push';
 import { readJSON, writeJSON } from './storage';
@@ -34,7 +41,8 @@ export function addMyVouch(v: MyVouch): void {
 }
 
 /**
- * Vouch IDs this device still wants notifications for (pending, unclaimed, in-window).
+ * Vouch IDs this device still wants notifications for (pending, unclaimed, not cancelled,
+ * in-window).
  * Used when a rotated push subscription must be re-registered after the server already
  * pruned the old record (#169) — the server's vouchIds set is rebuilt from this list.
  */
@@ -45,8 +53,9 @@ export async function getPendingVouchIds(): Promise<number[]> {
   const ids = await Promise.all(
     mine.map(async (m) => {
       const v = await getVouch(m.id).catch(() => null);
-      if (!v || v.claimed || v.slashed || v.cancelled) return null;
+      if (!v || v.claimed || v.slashed) return null;
       if (now >= v.created + VOUCH_TTL_SECS) return null;
+      if ((await isVouchCancelled(m.id)) === true) return null;
       return m.id;
     }),
   );
@@ -56,6 +65,11 @@ export async function getPendingVouchIds(): Promise<number[]> {
 export interface PendingVouch extends MyVouch {
   claimUrl: string;
   daysLeft: number;
+  /** The card's voucher, as stored on chain — the only address that can cancel it. */
+  from: string;
+  /** The deployed contract can cancel this card (`cancel_vouch`): its `is_cancelled` read
+   *  answered. False on a contract that predates it, or when that read failed. */
+  revocable: boolean;
 }
 
 /** The code a stored card's link carries: its claim-key seed, or an older card's secret. */
@@ -71,13 +85,17 @@ export async function getPendingVouches(origin: string): Promise<PendingVouch[]>
   await Promise.all(
     mine.map(async (m) => {
       const v = await getVouch(m.id).catch(() => null);
-      if (!v || v.claimed || v.slashed || v.cancelled) return;
+      if (!v || v.claimed || v.slashed) return;
       const deadline = v.created + VOUCH_TTL_SECS;
       if (now >= deadline) return; // window closed — stake already slashable
+      const cancelled = await isVouchCancelled(m.id);
+      if (cancelled) return; // the voucher revoked the link
       out.push({
         ...m,
         claimUrl: claimLink(origin, m.id, claimCodeOf(m)),
         daysLeft: Math.max(0, Math.ceil((deadline - now) / 86_400)),
+        from: v.from,
+        revocable: cancelled === false,
       });
     }),
   );
@@ -96,7 +114,7 @@ export interface OwedBonus {
 }
 
 /**
- * The 2nd-order bonuses `me` is still owed (belts/08 $§1): for each vouch minted here by `me`
+ * The 2nd-order bonuses `me` is still owed (belts/08 §1): for each vouch minted here by `me`
  * that has been claimed, read `get_pending(claimer)` and keep the entries whose voucher is
  * `me`. One row per person, largest first. A claimer who verified has an empty queue, so
  * their row drops out. A failed read for one person (including a deployed contract that
@@ -136,7 +154,7 @@ function getSeenClaimed(): { ids: number[]; baselined: boolean } {
 
 /**
  * Subscribe to push notifications for a newly minted vouch (if permission is granted and
- * VAPHD is configured). Fire-and-forget — failures are logged but don't break the mint flow.
+ * VAPID is configured). Fire-and-forget — failures are logged but don't break the mint flow.
  * Call this AFTER addMyVouch so the localStorage record exists and has walletAddress.
  */
 export async function subscribeToVouchPush(walletAddress: string, vouchId: number): Promise<void> {
