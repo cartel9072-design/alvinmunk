@@ -249,7 +249,7 @@ function ClaimInner({ params }: { params: { id: string } }) {
   if (cancelled && vouch && !vouch.claimed && !done) {
     return (
       <div className="container max-w-lg py-16">
-        <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-primary/80">
+        <p className="eyebrow-mono text-primary/80">
           {t('claim.cancelled.frame')}
         </p>
         <h1 className="mt-4 font-display text-4xl font-semibold tracking-tight">

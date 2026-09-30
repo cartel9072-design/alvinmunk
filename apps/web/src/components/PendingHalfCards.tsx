@@ -135,7 +135,7 @@ export function PendingHalfCards() {
                     setRevokeError(null);
                   }}
                   disabled={revoking}
-                  className="mt-1 font-mono text-[10px] uppercase tracking-wider text-muted-foreground underline hover:text-destructive"
+                  className="mt-1 font-mono text-2xs uppercase tracking-wider text-muted-foreground underline hover:text-destructive"
                 >
                   {t('pendingHalfCards.revoke')}
                 </button>
