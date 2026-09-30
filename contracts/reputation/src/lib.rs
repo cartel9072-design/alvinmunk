@@ -84,6 +84,8 @@ pub enum Error {
     LengthMismatch = 14,
     /// `mint_vouches` got no cards, or more than `MAX_BATCH_VOUCH`.
     BadBatchSize = 15,
+    /// The voucher cancelled this half-card, so it can no longer be claimed.
+    Cancelled = 16,
 }
 
 #[contracttype]
@@ -104,6 +106,7 @@ pub enum DataKey {
     VouchedBy(Address),        // u32 — distinct people who vouched for this address
     Backed(Address),           // u32 — distinct people this address vouched for
     ClaimPubkey(u64),          // vouch id -> ed25519 claim key (mint_vouch_signed / mint_vouches)
+    Cancelled(u64),            // vouch id -> bool (voucher revoked an unclaimed card)
 }
 
 /// Async half-card vouch. `mint_vouch_signed` binds it to an ed25519 claim key (stored
@@ -313,6 +316,39 @@ impl ReputationContract {
             panic_with_error!(&env, Error::BadSecret);
         }
         Self::settle_claim(&env, vouch_id, vouch, claimer);
+    }
+
+    /// `from` cancels an unclaimed half-card they minted, so a leaked link can no longer
+    /// land on a stranger. Only the voucher may cancel (`NotAuthorized`), and only while
+    /// the card is unclaimed. The stake is NOT refunded: the escrow is what makes an
+    /// unclaimed vouch cost something, so cancelling is a voluntary slash. Recorded under
+    /// `DataKey::Cancelled` rather than a new `Vouch` field, so deployed half-cards keep
+    /// decoding. Emits `vouch`/`cancelled`.
+    pub fn cancel_vouch(env: Env, from: Address, vouch_id: u64) {
+        from.require_auth();
+        let vouch: Vouch = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Vouch(vouch_id))
+            .unwrap_or_else(|| panic_with_error!(&env, Error::VouchNotFound));
+        if vouch.from != from {
+            panic_with_error!(&env, Error::NotAuthorized);
+        }
+        if vouch.claimed {
+            panic_with_error!(&env, Error::AlreadyClaimed);
+        }
+        let ckey = DataKey::Cancelled(vouch_id);
+        if env.storage().persistent().get(&ckey).unwrap_or(false) {
+            return; // already cancelled — idempotent
+        }
+        env.storage().persistent().set(&ckey, &true);
+        env.storage()
+            .persistent()
+            .extend_ttl(&ckey, BUMP_THRESHOLD, BUMP_EXTEND);
+        env.events().publish(
+            (symbol_short!("vouch"), symbol_short!("cancelled")),
+            (vouch_id, from),
+        );
     }
 
     /// Slash an unclaimed half-card after its 7-day window (the staked Social XP was
@@ -545,6 +581,9 @@ impl ReputationContract {
             .unwrap_or_else(|| panic_with_error!(env, Error::VouchNotFound));
         if vouch.claimed {
             panic_with_error!(env, Error::AlreadyClaimed);
+        }
+        if env.storage().persistent().get(&DataKey::Cancelled(vouch_id)).unwrap_or(false) {
+            panic_with_error!(env, Error::Cancelled);
         }
         vouch
     }

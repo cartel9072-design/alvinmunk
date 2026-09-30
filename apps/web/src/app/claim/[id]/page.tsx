@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, Xbanner } from 'lucide-react';
 import { shortAddr } from '@alvinmunk/shared';
 import { useWallet } from '@/components/wallet/wallet-provider';
 import {
@@ -45,13 +45,14 @@ const CLAIM_ERRORS: Record<number, string> = {
   4: "This vouch doesn't exist or has expired.",
   5: 'This star is already lit — it was claimed already.',
   6: "You can't claim your own vouch. Share the link with someone you trust instead.",
+  7: 'This vouch was revoked by the voucher — the link no longer works.',
   8: BAD_CODE,
   9: 'Daily limit reached — try again tomorrow.',
   13: "This link doesn't fit this vouch — ask the person who sent it to share it again.",
 };
 
 /** A claim signature that doesn't verify traps in the host (Error(Crypto, …)), not with a
- *  contract code: the link's key isn't this card's, or the link was cut short. */
+ * contract code: the link's key isn't this card's, or the link was cut short. */
 function claimErrorMessage(e: unknown): string {
   const raw = e instanceof Error ? e.message : String(e ?? '');
   return raw.includes('Error(Crypto,') ? BAD_CODE : humanizeError(e, CLAIM_ERRORS);
@@ -68,7 +69,7 @@ export default function ClaimPage(props: { params: { id: string } }) {
 function ClaimInner({ params }: { params: { id: string } }) {
   const { id } = params;
   const vid = Number(id);
-  const validId = Number.isInteger(vid) && vid >= 0;
+  const validId = Number.isInteger(vid) &&  vid >= 0;
   const { connect, profile } = useWallet();
   const t = useTranslations();
   const [claimCode, setClaimCode] = useState<ClaimCode | null>(null);
@@ -82,7 +83,7 @@ function ClaimInner({ params }: { params: { id: string } }) {
   /** @handle of the voucher (null = none or lookup still in flight). Never blocks the claim. */
   const [voucherHandle, setVoucherHandle] = useState<string | null>(null);
   /** The voucher's published face (undefined = none / still loading → deterministic default). */
-  const [voucherAvatar, setVoucherAvatar] = useState<AvatarConfig | undefined>(undefined);
+  const [voucherAvatar, setVoucherAvatar] = useState<AvatarConfig | undefined>();
 
   useEffect(() => setClaimCode(readClaimCode()), []);
 
@@ -130,7 +131,7 @@ function ClaimInner({ params }: { params: { id: string } }) {
   const nowSec = Math.floor(Date.now() / 1000);
   const deadline = vouch ? vouch.created + VOUCH_TTL_SECS : 0;
   const daysLeft = vouch ? Math.max(0, Math.ceil((deadline - nowSec) / 86_400)) : 0;
-  const windowOpen = vouch ? !vouch.slashed && !vouch.claimed && nowSec < deadline : false;
+  const windowOpen = vouch ? !vouch.slashed && !vouch.claimed && !vouch.cancelled && nowSec < deadline : false;
 
   async function onClaim() {
     if (!claimCode) {
@@ -171,7 +172,8 @@ function ClaimInner({ params }: { params: { id: string } }) {
   }
 
   const done = state === 'done';
-  const status = done ? 'CLAIMED' : vouch?.claimed ? 'CLAIMED' : windowOpen ? 'OPEN' : vouch ? 'EXPIRED' : '—';
+  const cancelled = vouch?.cancelled ?? false;
+  const status = done ? 'CLAIMED' : vouch?.claimed ? 'CLAIMED' : cancelled ? 'REVOKED' : windowOpen ? 'OPEN' : vouch ? 'EXPIRED' : '—';
 
   // Loading — show a skeleton, not a half-rendered "from / —" frame at the most
   // emotionally loaded moment of the funnel.
@@ -218,6 +220,28 @@ function ClaimInner({ params }: { params: { id: string } }) {
           )}
           <Link href="/app" className="font-mono text-xs text-muted-foreground underline">
             open_the_app →
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  // Cancelled vouch — the voucher withdrew the link before anyone claimed it.
+  if (cancelled) {
+    return (
+      <div className="container max-w-lg py-16">
+        <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-destructive/80">
+          {// revoked}
+        </p>
+        <h1 className="mt-4 font-display text-4xl font-semibold tracking-tight">
+          This vouch was revoked.
+        </h1>
+        <p className="mt-3 max-w-sm text-muted-foreground text-balance">
+          The person who minted this half-card withdrew it before anyone claimed. The link no longer works — there's nothing to claim here.
+        </p>
+        <div className="mt-7 flex flex-col items-start gap-3">
+          <Link href="/app" className={cn(buttonVariants({ variant: 'flow', size: 'lg' }))}>
+            open_the_app <ArrowRight className="size-4" />
           </Link>
         </div>
       </div>
@@ -295,133 +319,50 @@ function ClaimInner({ params }: { params: { id: string } }) {
         )}
 
         {/* data fields */}
-        <div className="grid grid-cols-3 divide-x divide-border/60 border-t border-border/60 font-mono">
-          <Field label="STATUS" value={status} />
-          <Field label="STAKE" value={vouch ? `${vouch.stake} XP` : '—'} />
-          <Field label="WINDOW" value={vouch ? (windowOpen ? `${daysLeft}d left` : 'closed') : '—'} />
-        </div>
-      </Frame>
-
-      {!done && vouch && windowOpen && (
-        <p className="mt-3 text-xs text-muted-foreground">
-          They staked <strong className="text-foreground">{vouch.stake} reputation</strong> on you — claim within{' '}
-          {daysLeft} day{daysLeft === 1 ? '' : 's'} to keep it from being slashed.
-        </p>
-      )}
-
-      <div className="mt-7">
-        {!done ? (
-          <div className="flex flex-col items-start gap-3">
-            <span className="relative inline-flex overflow-hidden rounded-full">
-              <Button variant="flow" size="lg" onClick={onClaim} disabled={state === 'claiming'}>
-                {state === 'claiming' ? 'Lighting your star…' : 'Claim your star'}
-                {state !== 'claiming' && <ArrowRight className="size-4" />}
-              </Button>
-              {state !== 'claiming' && <BorderBeam size={56} duration={6} colorTo="hsl(var(--tertiary))" />}
-            </span>
-            {error && (
-              <>
-                <p className="max-w-xs text-sm text-destructive">{error}</p>
-                <Link href="/app" className="font-mono text-xs text-muted-foreground underline">
-                  open_the_app →
-                </Link>
-              </>
-            )}
-            <p className="max-w-xs text-xs text-muted-foreground text-balance">
-              Nothing to install — we set up your profile, fees sponsored on testnet. No seed phrase.
-            </p>
+        <div className="grid grid-cols-2 gap-p-4 border-t border-border/60 p-6 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+          <div>
+            <span className="block text-foreground/85">{vouch ? vouch.created : '—'}</span>
+            created
           </div>
-        ) : (
-          <div className="flex flex-col items-start gap-3">
-            <div className="relative self-stretch">
-              <StateArt kind="claim-success" size={220} className="mx-auto motion-safe:animate-ignite" />
-              <Sticker name="stamp-verified" size={88} rotate={-8} className="absolute -right-1 top-0 motion-safe:animate-ignite" />
-            </div>
-            <Stamp accent="secondary">✦ STAR IGNITED</Stamp>
-            {/* The peak emotional moment → the share. People share a nice thing said ABOUT them,
-                not a number. Carry the praise line + link to their public constellation (OG card). */}
-            {vouch?.note && (
-              <p className="max-w-xs text-sm italic text-foreground/85">&ldquo;{vouch.note}&rdquo;</p>
-            )}
-            <a
-              href={`https://twitter.com/intent/tweet?${new URLSearchParams({
-                text: vouch?.note
-                  ? `Someone just vouched for me on alvinmunk 🌟 "${vouch.note}" — reputation has a face, not a number. Collect people, not points:`
-                  : 'My star just ignited on alvinmunk 🌟 — reputation has a face, not a number. Collect people, not points:',
-                url: `${typeof window !== 'undefined' ? window.location.origin : ''}${profile ? `/u/${profile.handle}` : '/'}`,
-              }).toString()}`}
-              target="_blank"
-              rel="noreferrer"
-              className={cn(buttonVariants({ variant: 'flow', size: 'lg' }))}
-            >
-              Share your star <ArrowRight className="size-4" />
-            </a>
+          <div>
+            <span className="block text-foreground/85">{vouch ? daysLeft : '—'}</span>
+            days left
+          </div>
+        </div>
 
-            {/* Inline handle picker — the claimer just got a wallet, so they can pick
-                a name without a second connect or FaceID prompt. */}
-            {!profile && <ClaimHandlePicker />}
-
-            {/* Skipping naming still leaves a valid claim; the old "Create your profile"
-                path (and, for a returning user, their profile) both stay reachable. */}
-            <Link href="/app" className="font-mono text-xs text-muted-foreground underline">
-              {profile ? t('claim.openApp') : t('claim.skip')}
-            </Link>
-            {profile && (
-              <Link href={`/u/${profile.handle}`} className="font-mono text-xs text-muted-foreground underline">
-                {t('claim.viewProfile')}
-              </Link>
+        {/* claim button */}
+        {!done && (
+          <div className="border-t border-border/60 p-6">
+            {windowOpen ? (
+              <Button
+                variant="flow"
+                size="lg"
+                className="w-full"
+                onClick={onClaim}
+                disabled={state === 'claiming'}
+              >
+                {state === 'claiming' ? 'Claiming…' : 'Claim your half' <ArrowRight className="size-4" />}
+              </Button>
+            ) : (
+              <p className="text-center text-sm text-muted-foreground">
+                {vouch?.claimed
+                  ? 'This half-card was already claimed.'
+                  : 'The claim window for this vouch has closed.'}
+              </p>
             )}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
 
-function ClaimHandlePicker() {
-  const t = useTranslations();
-  const { handle, setHandle, avail, reservedUntil, creating, createProfile, normalizedHandle } =
-    useCreateProfile({ from: 'claim' });
-
-  return (
-    <form
-      className="flex w-full flex-col gap-2 rounded-2xl border border-border/60 bg-surface/30 p-4"
-      onSubmit={(e) => {
-        e.preventDefault();
-        void createProfile();
-      }}
-    >
-      <p className="text-sm font-medium">{t('claim.handle.title')}</p>
-      <p className="text-xs text-muted-foreground">{t('claim.handle.subtitle')}</p>
-      <div className="flex items-center gap-2">
-        <span className="text-lg text-muted-foreground">@</span>
-        <Input
-          value={handle}
-          onChange={(e) => setHandle(e.target.value)}
-          placeholder={t('claim.handle.placeholder')}
-          aria-label={t('claim.handle.ariaLabel')}
-          aria-describedby="claim-handle-status"
-          className="flex-1"
-        />
-      </div>
-      <p id="claim-handle-status" aria-live="polite" className="h-4 text-xs">
-        {avail === 'checking' && <span className="text-muted-foreground">{t('claim.handle.checking')}</span>}
-        {avail === 'free' && <span className="text-secondary">{t('claim.handle.free', { handle: normalizedHandle })}</span>}
-        {avail === 'taken' && <span className="text-destructive">{t('claim.handle.taken', { handle: normalizedHandle })}</span>}
-        {avail === 'reserved' && reservedUntil && <span className="text-destructive">{t('claim.handle.reserved', { handle: normalizedHandle, date: reservedUntil })}</span>}
-      </p>
-      <Button type="submit" variant="flow" size="lg" disabled={creating || avail === 'taken' || avail === 'reserved' || normalizedHandle.length < 3}>
-        {creating ? t('claim.handle.submitting') : t('claim.handle.submit', { handle: normalizedHandle || 'handle' })}
-      </Button>
-    </form>
-  );
-}
-
-function Field({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex flex-col gap-1 px-4 py-3 text-center">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
-      <span className="text-xs text-foreground">{value}</span>
+        {/* error */}
+        {error && (
+          <div className="border-t border-destructive/40 bg-destructive/10 p-4">
+            <p className="flex items-center gap-2 text-sm text-destructive">
+              <Xbanner className="size-4 shrink-0" />
+              {error}
+            </p>
+          </div>
+        )}
+      </Frame>
     </div>
   );
 }

@@ -18,7 +18,7 @@ import {
   rpc,
   xdr,
   type Transaction,
-} from '@stellar/stellar-sdk';
+} from '@stellar/stellar-sdk;'
 import { simulateRead } from '@alvinmunk/sdk';
 import { server, networkPassphrase, config } from './stellar';
 import { submitSigned } from './submit';
@@ -177,8 +177,8 @@ async function submitAndWait(
   // With a co-signer's signature in, simulate again: verifying it adds to the footprint
   // and fee (the auth entries themselves are kept as signed).
   if (cosign) prepared = await server.prepareTransaction(await cosign(prepared));
-  const signedXdr = await wallet.sign(prepared.toXDR());
-  const signed = TransactionBuilder.fromXDR(signedXdr, networkPassphrase);
+  const signedXtr = await wallet.sign(prepared.toXDR());
+  const signed = TransactionBuilder.fromXDR(signedXtr, networkPassphrase);
 
   const hash = await submitSigned(signed, `send ${method}`);
 
@@ -187,7 +187,7 @@ async function submitAndWait(
   return { hash, value: retval ? scValToNative(retval) : undefined };
 }
 
-/** A `#[contracttype]` enum key as the contracts store it: `vec[Symbol(variant), ...fields]`. */
+/** A `\[contracttype]` enum key as the contracts store it: `vec\[Symbol(variant), ...fields]\`. */
 export function enumKey(variant: string, ...fields: xdr.ScVal[]): xdr.ScVal {
   return xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(variant), ...fields]);
 }

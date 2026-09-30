@@ -1,14 +1,15 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Copy, Check, Sparkles } from 'lucide-react';
-import { getPendingVouches, type PendingVouch } from '@/lib/myvouches';
+import { Copy, Check, Sparkles, Xbanner } from 'lucide-react';
+import { getPendingVouches, cancelMyVouch, type PendingVouch } from '@/lib/myvouches';
 import { Frame } from '@/components/fx/frame';
 import { Sticker } from '@/components/ui/sticker';
 import { StateArt } from '@/components/ui/state-art';
 import { buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useLocale, useTranslations } from '@/lib/i18n';
+import { useWallet } from '@/components/wallet/wallet-provider';
 
 /**
  * Pending half-cards — vouches you minted that NOBODY claimed yet. The re-engagement
@@ -19,8 +20,11 @@ export function PendingHalfCards() {
   const t = useTranslations();
   const { locale } = useLocale();
   const numberFormat = new Intl.NumberFormat(locale === 'tr' ? 'tr-TR' : 'en-US');
+  const { connect } = useWallet();
   const [items, setItems] = useState<PendingVouch[] | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
+  const [cancelling, setCancelling] = useState<number | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   useEffect(() => {
     getPendingVouches(window.location.origin)
@@ -38,12 +42,27 @@ export function PendingHalfCards() {
     }
   }
 
+  async function cancel(v: PendingVouch) {
+    setCancelError(null);
+    setCancelling(v.id);
+    try {
+      const wallet = await connect();
+      await cancelMyVouch(wallet, v.id);
+      // Optimistic removal — the vouch is gone from the pending list.
+      setItems((cur) => cur ? cur.filter((x) => x.id !== v.id) : cur);
+    } catch (e) {
+      setCancelError(e instanceof Error ? e.message : 'Couldn\u2019t cancel this vouch.');
+    } finally {
+      setCancelling(null);
+    }
+  }
+
   if (items === null) {
     return (
       <Frame label={t('pendingHalfCards.frame')} index="00" accent="tertiary" tape="tr">
         <div className="space-y-2 p-4">
           <div className="h-3 w-24 animate-pulse rounded bg-muted/40" />
-          <div className="h-10 animate-pulse rounded-xl bg-muted/30" />
+          <div className="h-10 animate-pulse rounded bg-muted/30" />
         </div>
       </Frame>
     );
@@ -68,6 +87,11 @@ export function PendingHalfCards() {
   return (
     <Frame label={t('pendingHalfCards.frame')} index={String(items.length).padStart(2, '0')} accent="tertiary" tape="tr">
       <Sticker name="stamp-ticket" size={60} rotate={-6} className="absolute -bottom-2 right-3 z-10 opacity-90" />
+      {cancelError && (
+        <p className="border-b border-destructive/40 bg-destructive/10 px-4 py-2 font-mono text-[10px] text-destructive">
+          {cancelError}
+        </p>
+      )}
       <ul className="divide-y divide-border/50">
         {items.map((v) => (
           <li key={v.id} className="flex items-center gap-3 p-4">
@@ -101,6 +125,15 @@ export function PendingHalfCards() {
             >
               {copied === v.id ? <Check className="size-4" /> : <Copy className="size-4" />}
               {copied === v.id ? t('pendingHalfCards.copied') : t('pendingHalfCards.copyLink')}
+            </button>
+            <button
+              onClick={() => cancel(v)}
+              disabled={cancelling === v.id}
+              className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'shrink-0 font-mono text-destructive hover:text-destructive')}
+              title={t('pendingHalfCards.revokeTitle')}
+            >
+              <Xbanner className="size-4" />
+              {cancelling === v.id ? t('pendingHalfCards.revoking') : t('pendingHalfCards.revokeLink')}
             </button>
           </li>
         ))}

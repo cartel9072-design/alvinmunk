@@ -1990,6 +1990,60 @@ fn upgrade_keeps_legacy_vouches_claimable_and_serves_signed_ones() {
     assert_eq!(client.get_vouch(&id).unwrap().claimer, Some(carol));
 }
 
+// --- Cancelling an unclaimed vouch whose link leaked (issue #78) ---
+
+#[test]
+fn cancel_vouch_blocks_claim_and_does_not_refund_the_stake() {
+    use soroban_sdk::{testutils::Events as _, vec, IntoVal, Val};
+    let (env, client, _admin) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let (s, h) = secret_and_hash(&env, 7);
+    let id = client.mint_vouch(&alice, &h, &String::from_str(&env, "leaked"));
+    assert_eq!(client.get_score(&alice), 15); // stake escrowed
+
+    client.cancel_vouch(&alice, &id);
+    // Cancelling is a voluntary slash: the stake stays escrowed, never refunded.
+    assert_eq!(client.get_score(&alice), 15);
+    let cancelled: (Address, Vec<Val>, Val) = (
+        client.address.clone(),
+        (symbol_short!("vouch"), symbol_short!("cancelled")).into_val(&env),
+        (id, alice.clone()).into_val(&env),
+    );
+    assert_eq!(env.events().all(), vec![&env, cancelled]);
+
+    // The leaked secret no longer claims the card.
+    assert_eq!(
+        client.try_claim_vouch(&bob, &id, &s),
+        Err(Ok(contract_err(Error::Cancelled)))
+    );
+    assert!(!client.get_vouch(&id).unwrap().claimed);
+}
+
+#[test]
+fn only_the_voucher_can_cancel_and_only_while_unclaimed() {
+    let (env, client, _admin) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let (s, h) = secret_and_hash(&env, 7);
+    let id = client.mint_vouch(&alice, &h, &String::from_str(&env, "x"));
+
+    assert_eq!(
+        client.try_cancel_vouch(&bob, &id),
+        Err(Ok(contract_err(Error::NotAuthorized)))
+    );
+    assert_eq!(
+        client.try_cancel_vouch(&alice, &(id + 1)),
+        Err(Ok(contract_err(Error::VouchNotFound)))
+    );
+
+    client.claim_vouch(&bob, &id, &s);
+    assert_eq!(
+        client.try_cancel_vouch(&alice, &id),
+        Err(Ok(contract_err(Error::AlreadyClaimed)))
+    );
+}
+
 // --- Attester allowlist removal (issue #132) ---
 
 /// `remove_attester` is the operator's kill switch for a compromised attester (the
