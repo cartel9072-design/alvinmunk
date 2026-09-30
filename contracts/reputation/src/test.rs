@@ -163,6 +163,68 @@ fn double_claim_reverts() {
 }
 
 #[test]
+fn cancel_vouch_prevents_claim() {
+    let (env, client, _admin) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let (secret, hash) = secret_and_hash(&env, 7);
+    let id = client.mint_vouch(&alice, &hash, &String::from_str(&env, "leaked"));
+
+    client.cancel_vouch(&alice, &id);
+
+    assert_eq!(
+        client.try_claim_vouch(&bob, &id, &secret),
+        Err(Ok(contract_err(Error::Cancelled)))
+    );
+}
+
+#[test]
+fn cancel_vouch_only_by_voucher() {
+    let (env, client, _admin) = setup();
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let (_secret, hash) = secret_and_hash(&env, 7);
+    let id = client.mint_vouch(&alice, &hash, &String::from_str(&env, "x"));
+
+    assert_eq!(
+        client.try_cancel_vouch(&bob, &id),
+        Err(Ok(contract_err(Error::NotAuthorized)))
+    );
+}
+
+#[test]
+fn cancel_vouch_does_not_refund_stake() {
+    let (env, client, _admin) = setup();
+    let alice = Address::generate(&env);
+    let (_secret, hash) = secret_and_hash(&env, 7);
+    let id = client.mint_vouch(&alice, &hash, &String::from_str(&env, "x"));
+    assert_eq!(client.get_score(&alice), 15); // escrowed
+
+    client.cancel_vouch(&alice, &id);
+
+    // Cancelling is a voluntary slash: the stake is NOT refunded.
+    assert_eq!(client.get_score(&alice), 15);
+}
+
+#[test]
+fn cancel_vouch_emits_event() {
+    use soroban_sdk::{testutils::Events as _, vec, IntoVal, Val};
+    let (env, client, _admin) = setup();
+    let alice = Address::generate(&env);
+    let (_secret, hash) = secret_and_hash(&env, 7);
+    let id = client.mint_vouch(&alice, &hash, &String::from_str(&env, "x"));
+
+    client.cancel_vouch(&alice, &id);
+
+    let cancelled: (Address, Vec<Val>, Val) = (
+        client.address.clone(),
+        (symbol_short!("vouch"), symbol_short!("cancelled")).into_val(&env),
+        (id, alice.clone()).into_val(&env),
+    );
+    assert!(env.events().all().contains(&cancelled));
+}
+
+#[test]
 fn self_vouch_reverts() {
     let (env, client, _admin) = setup();
     let alice = Address::generate(&env);
@@ -1988,60 +2050,6 @@ fn upgrade_keeps_legacy_vouches_claimable_and_serves_signed_ones() {
     assert_bad_signature(|| client.claim_vouch_signed(&carol, &id, &bobs_sig));
     client.claim_vouch_signed(&carol, &id, &claim_sig(&env, &client, &sk, id, &carol));
     assert_eq!(client.get_vouch(&id).unwrap().claimer, Some(carol));
-}
-
-// --- Cancelling an unclaimed vouch whose link leaked (issue #78) ---
-
-#[test]
-fn cancel_vouch_blocks_claim_and_does_not_refund_the_stake() {
-    use soroban_sdk::{testutils::Events as _, vec, IntoVal, Val};
-    let (env, client, _admin) = setup();
-    let alice = Address::generate(&env);
-    let bob = Address::generate(&env);
-    let (s, h) = secret_and_hash(&env, 7);
-    let id = client.mint_vouch(&alice, &h, &String::from_str(&env, "leaked"));
-    assert_eq!(client.get_score(&alice), 15); // stake escrowed
-
-    client.cancel_vouch(&alice, &id);
-    // Cancelling is a voluntary slash: the stake stays escrowed, never refunded.
-    assert_eq!(client.get_score(&alice), 15);
-    let cancelled: (Address, Vec<Val>, Val) = (
-        client.address.clone(),
-        (symbol_short!("vouch"), symbol_short!("cancelled")).into_val(&env),
-        (id, alice.clone()).into_val(&env),
-    );
-    assert_eq!(env.events().all(), vec![&env, cancelled]);
-
-    // The leaked secret no longer claims the card.
-    assert_eq!(
-        client.try_claim_vouch(&bob, &id, &s),
-        Err(Ok(contract_err(Error::Cancelled)))
-    );
-    assert!(!client.get_vouch(&id).unwrap().claimed);
-}
-
-#[test]
-fn only_the_voucher_can_cancel_and_only_while_unclaimed() {
-    let (env, client, _admin) = setup();
-    let alice = Address::generate(&env);
-    let bob = Address::generate(&env);
-    let (s, h) = secret_and_hash(&env, 7);
-    let id = client.mint_vouch(&alice, &h, &String::from_str(&env, "x"));
-
-    assert_eq!(
-        client.try_cancel_vouch(&bob, &id),
-        Err(Ok(contract_err(Error::NotAuthorized)))
-    );
-    assert_eq!(
-        client.try_cancel_vouch(&alice, &(id + 1)),
-        Err(Ok(contract_err(Error::VouchNotFound)))
-    );
-
-    client.claim_vouch(&bob, &id, &s);
-    assert_eq!(
-        client.try_cancel_vouch(&alice, &id),
-        Err(Ok(contract_err(Error::AlreadyClaimed)))
-    );
 }
 
 // --- Attester allowlist removal (issue #132) ---

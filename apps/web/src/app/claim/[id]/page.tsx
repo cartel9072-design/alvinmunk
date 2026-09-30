@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowRight, Xbanner } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { shortAddr } from '@alvinmunk/shared';
 import { useWallet } from '@/components/wallet/wallet-provider';
 import {
@@ -45,15 +45,15 @@ const CLAIM_ERRORS: Record<number, string> = {
   4: "This vouch doesn't exist or has expired.",
   5: 'This star is already lit — it was claimed already.',
   6: "You can't claim your own vouch. Share the link with someone you trust instead.",
-  7: 'This vouch was revoked by the voucher — the link no longer works.',
+  7: 'This vouch was cancelled by the voucher.',
   8: BAD_CODE,
   9: 'Daily limit reached — try again tomorrow.',
   13: "This link doesn't fit this vouch — ask the person who sent it to share it again.",
 };
 
 /** A claim signature that doesn't verify traps in the host (Error(Crypto, …)), not with a
- * contract code: the link's key isn't this card's, or the link was cut short. */
-function claimErrorMessage(e: unknown): string {
+ *  contract code: the link's key isn't this card's, or the link was cut short. */
+function claimErrorMessage(e): string {
   const raw = e instanceof Error ? e.message : String(e ?? '');
   return raw.includes('Error(Crypto,') ? BAD_CODE : humanizeError(e, CLAIM_ERRORS);
 }
@@ -69,7 +69,7 @@ export default function ClaimPage(props: { params: { id: string } }) {
 function ClaimInner({ params }: { params: { id: string } }) {
   const { id } = params;
   const vid = Number(id);
-  const validId = Number.isInteger(vid) &&  vid >= 0;
+  const validId = Number.isInteger(vid) && vid >= 0;
   const { connect, profile } = useWallet();
   const t = useTranslations();
   const [claimCode, setClaimCode] = useState<ClaimCode | null>(null);
@@ -83,7 +83,7 @@ function ClaimInner({ params }: { params: { id: string } }) {
   /** @handle of the voucher (null = none or lookup still in flight). Never blocks the claim. */
   const [voucherHandle, setVoucherHandle] = useState<string | null>(null);
   /** The voucher's published face (undefined = none / still loading → deterministic default). */
-  const [voucherAvatar, setVoucherAvatar] = useState<AvatarConfig | undefined>();
+  const [voucherAvatar, setVoucherAvatar] = useState<AvatarConfig | undefined>(undefined);
 
   useEffect(() => setClaimCode(readClaimCode()), []);
 
@@ -172,8 +172,18 @@ function ClaimInner({ params }: { params: { id: string } }) {
   }
 
   const done = state === 'done';
-  const cancelled = vouch?.cancelled ?? false;
-  const status = done ? 'CLAIMED' : vouch?.claimed ? 'CLAIMED' : cancelled ? 'REVOKED' : windowOpen ? 'OPEN' : vouch ? 'EXPIRED' : '—';
+  const cancelled = !!vouch?.cancelled;
+  const status = done
+    ? 'CLAIMED'
+    : vouch?.claimed
+      ? 'CLAIMED'
+      : cancelled
+        ? 'CANCELLED'
+        : windowOpen
+          ? 'OPEN'
+          : vouch
+            ? 'EXPIRED'
+            : '—';
 
   // Loading — show a skeleton, not a half-rendered "from / —" frame at the most
   // emotionally loaded moment of the funnel.
@@ -226,22 +236,48 @@ function ClaimInner({ params }: { params: { id: string } }) {
     );
   }
 
-  // Cancelled vouch — the voucher withdrew the link before anyone claimed it.
-  if (cancelled) {
+  // Cancelled — the voucher revoked the link. The card can no longer be claimed;
+  // show a clear, final state instead of a dead claim button.
+  if (cancelled && !done) {
     return (
       <div className="container max-w-lg py-16">
-        <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-destructive/80">
-          {// revoked}
+        <p className="font-mono text-[11px] uppercase tracking-[0.28em] text-primary/80">
+          {'// vouch_cancelled'}
         </p>
         <h1 className="mt-4 font-display text-4xl font-semibold tracking-tight">
-          This vouch was revoked.
+          This vouch was cancelled.
         </h1>
-        <p className="mt-3 max-w-sm text-muted-foreground text-balance">
-          The person who minted this half-card withdrew it before anyone claimed. The link no longer works — there's nothing to claim here.
+        <p className="mt-3 max-w-sm text-muted-foregound text-balance">
+          The person who sent this link revoked it. The card can no longer be claimed — ask them to vouch you again.
         </p>
+        <Frame label={`vouch // #${id}`} index={status} className="mt-7">
+          <div className="grid grid-cols[1fr_auto_1fr] items-center gap-2 p-6">
+            <div className="flex flex-col items-center gap-2 text-center">
+              {vouch ? (
+                <Avatar address={vouch.from} avatar={voucherAvatar} handle={voucherHandle ?? undefined} size={88} />
+              ) : (
+                <Crest address={`voucher-${id}`} size;={88} points={6} animate />
+              )}
+              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {voucherHandle ? `@${voucherHandle}` : vouch ? shortAddr(vouch.from) : 'from'}
+              </span>
+            </div>
+            <ArrowRight className="size-5 text-muted-foreground" />
+            <div className="flex flex-col items-center gap-2 text-center">
+              <div className="grid size-[88px] place-items-center border border-dashed border-border bg-surface/30">
+                <span className="font-mono text-[10px] uppercase text-muted-foreground">
+                  revoked
+                </span>
+              </div>
+              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                cancelled
+              </span>
+            </div>
+          </div>
+        </Frame>
         <div className="mt-7 flex flex-col items-start gap-3">
-          <Link href="/app" className={cn(buttonVariants({ variant: 'flow', size: 'lg' }))}>
-            open_the_app <ArrowRight className="size-4" />
+          <Link href="/app" className="font-mono text-xs text-muted-foreground underline">
+            open_the_app →
           </Link>
         </div>
       </div>
@@ -319,50 +355,4 @@ function ClaimInner({ params }: { params: { id: string } }) {
         )}
 
         {/* data fields */}
-        <div className="grid grid-cols-2 gap-p-4 border-t border-border/60 p-6 font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
-          <div>
-            <span className="block text-foreground/85">{vouch ? vouch.created : '—'}</span>
-            created
-          </div>
-          <div>
-            <span className="block text-foreground/85">{vouch ? daysLeft : '—'}</span>
-            days left
-          </div>
-        </div>
-
-        {/* claim button */}
-        {!done && (
-          <div className="border-t border-border/60 p-6">
-            {windowOpen ? (
-              <Button
-                variant="flow"
-                size="lg"
-                className="w-full"
-                onClick={onClaim}
-                disabled={state === 'claiming'}
-              >
-                {state === 'claiming' ? 'Claiming…' : 'Claim your half' <ArrowRight className="size-4" />}
-              </Button>
-            ) : (
-              <p className="text-center text-sm text-muted-foreground">
-                {vouch?.claimed
-                  ? 'This half-card was already claimed.'
-                  : 'The claim window for this vouch has closed.'}
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* error */}
-        {error && (
-          <div className="border-t border-destructive/40 bg-destructive/10 p-4">
-            <p className="flex items-center gap-2 text-sm text-destructive">
-              <Xbanner className="size-4 shrink-0" />
-              {error}
-            </p>
-          </div>
-        )}
-      </Frame>
-    </div>
-  );
-}
+        <div className="grid grid-col

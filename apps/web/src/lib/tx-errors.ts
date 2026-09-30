@@ -22,7 +22,8 @@ const MESSAGES: Record<string, string> = {
   paymentNoDestination: 'That account doesn’t exist yet, so it can’t receive a payment.',
   paymentNoTrust: 'The recipient hasn’t enabled this asset yet, so they can’t receive it.',
   changeTrustLowReserve: 'You need a little more XLM to hold USDC — add some and try again.',
-  // Cancelling a vouch is a voluntary slash, so the stake is not refunded.
+  // cancel_vouch on an already-claimed card (#78).
+  vouchAlreadyClaimed: 'This vouch was already claimed — it can’t now be cancelled.',
 };
 
 /** The message for a rejection code; unknown codes still name the code for support. */
@@ -40,7 +41,7 @@ export function txRejectionMessage(code: string): string {
  * inner code, or for `txFailed` the first operation that didn't succeed. `unknown` when
  * there is no result or it can't be read.
  */
-export function txRejectionCode(result:  xdr.TransactionResult | undefined): string {
+export function txRejectionCode(result: typeof xdr.TransactionResult | undefined): string {
   try {
     const outer = result?.result();
     if (!outer) return 'unknown';
